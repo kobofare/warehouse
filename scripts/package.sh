@@ -10,6 +10,7 @@ TARGET_GOOS="${TARGET_GOOS:-linux}"
 TARGET_GOARCH="${TARGET_GOARCH:-amd64}"
 TAG_PATTERN='^v[0-9]+\.[0-9]+\.[0-9]+$'
 MAIN_BRANCH="main"
+MAIN_REF="origin/${MAIN_BRANCH}"
 ORIGINAL_REF="$(git -C "${ROOT_DIR}" symbolic-ref --quiet --short HEAD || git -C "${ROOT_DIR}" rev-parse --verify HEAD)"
 SWITCHED_REF=0
 TARGET_TAG=""
@@ -68,9 +69,21 @@ next_patch_tag() {
   echo "v${major}.${minor}.$((patch + 1))"
 }
 
-prepare_target_tag() {
-  git -C "${ROOT_DIR}" fetch --tags --quiet
+sync_main_from_origin() {
+  if ! git -C "${ROOT_DIR}" remote get-url origin >/dev/null 2>&1; then
+    echo "Remote 'origin' not found." >&2
+    exit 1
+  fi
+  echo "Fetching latest code from origin/${MAIN_BRANCH} and tags..."
+  git -C "${ROOT_DIR}" fetch --prune origin "${MAIN_BRANCH}" --tags
 
+  if ! git -C "${ROOT_DIR}" rev-parse -q --verify "refs/remotes/${MAIN_REF}" >/dev/null; then
+    echo "Remote branch not found: ${MAIN_REF}" >&2
+    exit 1
+  fi
+}
+
+prepare_target_tag() {
   if [[ -n "${REQUESTED_TAG}" ]]; then
     validate_tag "${REQUESTED_TAG}"
     if ! git -C "${ROOT_DIR}" rev-parse -q --verify "refs/tags/${REQUESTED_TAG}" >/dev/null; then
@@ -81,15 +94,15 @@ prepare_target_tag() {
     return 0
   fi
 
-  if ! git -C "${ROOT_DIR}" rev-parse -q --verify "refs/heads/${MAIN_BRANCH}" >/dev/null; then
-    echo "Branch not found: ${MAIN_BRANCH}" >&2
+  if ! git -C "${ROOT_DIR}" rev-parse -q --verify "refs/remotes/${MAIN_REF}" >/dev/null; then
+    echo "Remote branch not found: ${MAIN_REF}" >&2
     exit 1
   fi
 
   local latest_tag
   latest_tag="$(latest_semver_tag)"
   local main_hash
-  main_hash="$(git -C "${ROOT_DIR}" rev-parse --verify "${MAIN_BRANCH}")"
+  main_hash="$(git -C "${ROOT_DIR}" rev-parse --verify "${MAIN_REF}")"
 
   if [[ -n "${latest_tag}" ]]; then
     local latest_hash
@@ -111,7 +124,7 @@ prepare_target_tag() {
 
   TARGET_TAG="$(next_patch_tag "${latest_tag}")"
   validate_tag "${TARGET_TAG}"
-  echo "Creating tag ${TARGET_TAG} on ${MAIN_BRANCH}@${main_hash}" >&2
+  echo "Creating tag ${TARGET_TAG} on ${MAIN_REF}@${main_hash}" >&2
   git -C "${ROOT_DIR}" tag "${TARGET_TAG}" "${main_hash}"
   echo "Pushing tag ${TARGET_TAG} to origin" >&2
   git -C "${ROOT_DIR}" push origin "${TARGET_TAG}"
@@ -247,6 +260,7 @@ create_package() {
 }
 
 main() {
+  sync_main_from_origin
   local rc
   if ! prepare_target_tag; then
     rc=$?
